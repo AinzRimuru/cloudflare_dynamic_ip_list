@@ -99,6 +99,7 @@ wrangler deploy
 | `ACCOUNT_ID` | Variable | Cloudflare Account ID |
 | `LIST_ID` | Variable | IP List ID |
 | `API_TOKEN` | Secret | Cloudflare API Token |
+| `EXPIRE_DAYS` | Variable | IP 过期天数（默认 7） |
 
 绑定 KV Namespace:
 
