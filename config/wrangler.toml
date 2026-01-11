@@ -1,0 +1,46 @@
+# Cloudflare Worker 配置文件
+# 文档: https://developers.cloudflare.com/workers/wrangler/configuration/
+
+name = "iplist-worker"
+main = "../src/worker.js"
+compatibility_date = "2024-01-01"
+
+# ============================================
+# 环境变量 (生产环境)
+# ============================================
+# 敏感信息建议使用 wrangler secret 命令设置
+# wrangler secret put ACCESS_TOKEN
+# wrangler secret put API_TOKEN
+
+[vars]
+ACCOUNT_ID = "your-account-id-here"       # Cloudflare Account ID
+LIST_ID = "your-list-id-here"             # IP List ID
+EXPIRE_DAYS = "1"
+ALLOWED_HOSTS = '["your-domain.example.com"]'  # 允许访问的域名，留空允许所有域名访问
+
+# ============================================
+# KV Namespace 绑定
+# ============================================
+# 创建 KV namespace:
+# wrangler kv:namespace create "IP_WHITELIST"
+# 然后将创建的 id 填入下面的 id 字段
+
+[[kv_namespaces]]
+binding = "IP_WHITELIST"
+id = "your-kv-namespace-id-here"
+# preview_id = "your-preview-kv-namespace-id"  # 开发环境使用
+
+# ============================================
+# 路由配置 (可选)
+# ============================================
+# 将 Worker 绑定到自定义域名
+# routes = [
+#   { pattern = "iplist.your-domain.com/*", zone_name = "your-domain.com" }
+# ]
+
+# ============================================
+# Cron Triggers (可选)
+# ============================================
+# 定时清理任务 (可选，当前实现每次更新时自动清理)
+# [triggers]
+# crons = ["0 */6 * * *"]  # 每 6 小时执行一次
