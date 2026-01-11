@@ -38,27 +38,30 @@
 ## 快速开始
 
 1. [部署 Worker](#1-部署-worker)
-2. [配置环境变量](#2-配置环境变量)
-3. [配置 iOS 快捷指令](#3-配置-ios-快捷指令)
-4. [配置 Access Policy](#4-配置-access-policy)
+2. [创建 KV Namespace](#2-创建-kv-namespace)
+3. [创建 IP List](#3-创建-ip-list)
+4. [配置环境变量](#4-配置环境变量)
+5. [配置 Cloudflare Access](#5-配置-cloudflare-access)
+6. [配置 iOS 快捷指令](#6-配置-ios-快捷指令)
 
 ## 目录结构
 
 ```
-iplist_worker/
+cloudflare_dynamic_ip_list/
 ├── README.md           # 本文档
 ├── src/
-│   ├── worker.js       # Worker 主代码
-│   └── worker_debug.js # 带调试端点的版本
+│   └── worker.js       # Worker 主代码
 ├── config/
 │   ├── wrangler.toml   # Cloudflare Worker 配置
 │   └── example.env     # 环境变量示例
 ├── docs/
 │   ├── deployment.md   # 部署指南
 │   ├── shortcuts.md    # iOS 快捷指令配置
-│   └── api.md          # API 文档
+│   ├── api.md          # API 文档
+│   └── architecture.md # 架构说明
 └── scripts/
     ├── create_list.sh  # 创建 IP List 脚本
+    ├── deploy.sh       # 快速部署脚本
     └── get_info.sh     # 获取 Account ID 脚本
 ```
 
@@ -85,12 +88,61 @@ wrangler login
 
 ### 部署
 
+使用快速部署脚本（推荐）：
+
 ```bash
-cd D:\nazarick\iplist_worker
+./scripts/deploy.sh
+```
+
+或手动部署：
+
+```bash
 wrangler deploy
 ```
 
-## 2. 配置环境变量
+## 2. 创建 KV Namespace
+
+创建用于存储 IP 和时间戳的 KV 命名空间：
+
+```bash
+wrangler kv namespace create IP_WHITELIST
+```
+
+创建后会显示 KV Namespace ID，将其添加到 `wrangler.toml`：
+
+```toml
+[[kv_namespaces]]
+binding = "IP_WHITELIST"
+id = "your_kv_namespace_id"
+```
+
+## 3. 创建 IP List
+
+### 方法一：使用脚本创建（推荐）
+
+```bash
+export CF_API_TOKEN="your_api_token"
+export CF_ACCOUNT_ID="your_account_id"
+./scripts/create_list.sh "Dynamic IP Whitelist"
+```
+
+### 方法二：手动创建
+
+1. 进入 Cloudflare Dashboard → **Zero Trust**
+2. 左侧菜单 → **Gateway** → **Lists**
+3. 点击 **Create List**
+4. 类型选择 **IP**，名称填写 `Dynamic IP Whitelist`
+5. 创建后记录 List ID
+
+### 辅助脚本
+
+| 脚本 | 功能 |
+|------|------|
+| `scripts/get_info.sh` | 获取 Account ID 和现有 Lists |
+| `scripts/create_list.sh` | 创建新的 IP List |
+| `scripts/deploy.sh` | 快速部署 Worker |
+
+## 4. 配置环境变量
 
 在 Worker Dashboard 或 `wrangler.toml` 中配置以下变量：
 
@@ -100,6 +152,7 @@ wrangler deploy
 | `LIST_ID` | Variable | IP List ID |
 | `API_TOKEN` | Secret | Cloudflare API Token |
 | `EXPIRE_DAYS` | Variable | IP 过期天数（默认 7） |
+| `ALLOWED_HOSTS` | Variable | 允许访问的域名列表（可选，JSON 数组） |
 
 绑定 KV Namespace:
 
@@ -107,16 +160,16 @@ wrangler deploy
 |--------------|-------------|
 | `IP_WHITELIST` | IP_WHITELIST |
 
-## 3. 配置 Cloudflare Access
+## 5. 配置 Cloudflare Access
 
-### 3.1 创建 Service Token
+### 5.1 创建 Service Token
 
 1. 进入 Cloudflare Dashboard → **Zero Trust**
 2. 左侧菜单 → **Access** → **Service Auth**
 3. 点击 **Create Service Token**
 4. 填写信息并保存，记录生成的 **Service Token** 和 **Client ID**
 
-### 3.2 配置 Access Policy
+### 5.2 配置 Access Policy
 
 1. 进入 **Access** → **Applications**
 2. 添加新应用，配置你的 Worker 路由
@@ -124,7 +177,7 @@ wrangler deploy
    - 选择 **Service Token** → 你创建的 Token
    - Action: **Allow**
 
-### 3.3 客户端请求方式
+### 5.3 客户端请求方式
 
 ```bash
 curl -H "CF-Access-Client-Id: <Client_ID>" \
@@ -132,24 +185,59 @@ curl -H "CF-Access-Client-Id: <Client_ID>" \
      https://your-worker.workers.dev
 ```
 
-## 4. 配置 iOS 快捷指令
+## 6. 配置 iOS 快捷指令
 
 详见 [docs/shortcuts.md](docs/shortcuts.md)
 
-## 5. 配置 Access Policy
+## 7. 配置 Access Policy 引用 IP List
 
-在 Zero Trust 控制台配置 Access Policy 引用动态 IP 列表：
+在 Zero Trust 控制台配置 Access Policy 引用动态 IP 列表，用于保护你的应用：
 
 | Action | Rule type | Selector | Value |
 |--------|-----------|----------|-------|
 | Allow | Include | IP list | Dynamic IP Whitelist |
+
+## API 端点
+
+Worker 提供以下 API 端点：
+
+| 端点 | 方法 | 说明 | 认证 |
+|------|------|------|------|
+| `/` | POST | 注册/更新当前 IP | Service Token |
+| `/health` | GET | 健康检查 | 无需认证 |
+| `/debug` 或 `/list` | GET | 查看当前 IP 列表 | Service Token |
+
+### 请求示例
+
+注册 IP：
+
+```bash
+curl -X POST \
+  -H "CF-Access-Client-Id: <Client_ID>" \
+  -H "CF-Access-Client-Secret: <Service_Token>" \
+  https://your-worker.workers.dev
+```
+
+健康检查：
+
+```bash
+curl https://your-worker.workers.dev/health
+```
+
+查看 IP 列表：
+
+```bash
+curl -H "CF-Access-Client-Id: <Client_ID>" \
+     -H "CF-Access-Client-Secret: <Service_Token>" \
+     https://your-worker.workers.dev/debug
+```
 
 ## 安全建议
 
 1. **使用 Service Token**：通过 Cloudflare Access 进行认证
 2. **定期轮换 Token**：建议每 90 天更换
 3. **启用 HTTPS**：Worker 自动支持
-4. **限制 API Token 权限**：仅授予 Gateway List 编辑权限
+4. **限制 API Token 权限**：仅授予 账户 Zero Trust 读取/编辑权限
 
 ## 故障排查
 

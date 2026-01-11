@@ -201,6 +201,8 @@ async function updateIPWhitelist(env, clientIP) {
 
 /**
  * 同步 IP 列表到 Cloudflare
+ * - 添加新的有效 IP
+ * - 删除过期的 IP
  */
 async function syncToCloudflareList(env, IPs) {
   const accountId = env.ACCOUNT_ID || CONFIG.ACCOUNT_ID;
@@ -213,15 +215,9 @@ async function syncToCloudflareList(env, IPs) {
     throw new Error(`Missing config: ACCOUNT_ID=${!!accountId}, LIST_ID=${!!listId}, API_TOKEN=${!!apiToken}`);
   }
 
-  // 如果没有有效 IP，不发送空数组（Cloudflare 不接受空 items）
-  if (IPs.length === 0) {
-    console.log('No valid IPs to sync, skipping API call');
-    return;
-  }
-
   const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/gateway/lists/${listId}`;
 
-  // 先获取当前 List 中的所有 IP
+  // 获取当前 List 中的所有 IP
   const existingResponse = await fetch(url, {
     headers: {
       'Authorization': `Bearer ${apiToken}`,
@@ -235,25 +231,46 @@ async function syncToCloudflareList(env, IPs) {
   }
 
   const existingData = await existingResponse.json();
-  const existingIPs = new Set(existingData.result?.items?.map(item => item.value) || []);
+  const existingItems = existingData.result?.items || [];
 
-  // 找出需要添加的新 IP（不重复添加）
-  const newIPs = IPs.filter(ip => !existingIPs.has(ip));
+  // 构建现有 IP 的 Map，记录 value 和 id
+  const existingIPMap = new Map();
+  for (const item of existingItems) {
+    existingIPMap.set(item.value, item.id);
+  }
 
-  if (newIPs.length === 0) {
-    console.log('All IPs already exist in the list, skipping update');
+  // 找出需要添加的新 IP
+  const newIPs = IPs.filter(ip => !existingIPMap.has(ip));
+
+  // 找出需要删除的过期 IP（在 Cloudflare List 中但不在有效 IP 列表中）
+  const expiredIPs = Array.from(existingIPMap.entries())
+    .filter(([ip]) => !IPs.includes(ip))
+    .map(([ip, id]) => ({ ip, id }));
+
+  const requestBody = {};
+
+  if (newIPs.length > 0) {
+    requestBody.append = newIPs.map(ip => ({ value: ip, description: 'Auto-added' }));
+  }
+
+  if (expiredIPs.length > 0) {
+    requestBody.remove = expiredIPs.map(({ id }) => ({ id }));
+  }
+
+  // 如果没有变化，跳过更新
+  if (newIPs.length === 0 && expiredIPs.length === 0) {
+    console.log('No changes needed, skipping update');
     return;
   }
 
-  // 使用 append 模式只添加新 IP
-  const appendItems = newIPs.map(ip => ({ value: ip, description: 'Auto-added' }));
-  const requestBody = {
-    append: appendItems,
-  };
-
-  console.log(`Adding ${newIPs.length} new IPs to Cloudflare List: ${listId} (total: ${IPs.length})`);
-  console.log(`New IPs: ${newIPs.join(', ')}`);
-  console.log(`Request body: ${JSON.stringify(requestBody)}`);
+  console.log(`Syncing to Cloudflare List ${listId}:`);
+  if (newIPs.length > 0) {
+    console.log(`  Adding ${newIPs.length} new IPs: ${newIPs.join(', ')}`);
+  }
+  if (expiredIPs.length > 0) {
+    console.log(`  Removing ${expiredIPs.length} expired IPs: ${expiredIPs.map(e => e.ip).join(', ')}`);
+  }
+  console.log(`Total valid IPs: ${IPs.length}`);
 
   const response = await fetch(url, {
     method: 'PATCH',
