@@ -201,8 +201,7 @@ async function updateIPWhitelist(env, clientIP) {
 
 /**
  * 同步 IP 列表到 Cloudflare
- * - 添加新的有效 IP
- * - 删除过期的 IP
+ * - 使用 PUT 方法完全覆盖 List 中的 IP 项
  */
 async function syncToCloudflareList(env, IPs) {
   const accountId = env.ACCOUNT_ID || CONFIG.ACCOUNT_ID;
@@ -217,7 +216,7 @@ async function syncToCloudflareList(env, IPs) {
 
   const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/gateway/lists/${listId}`;
 
-  // 获取当前 List 中的所有 IP
+  // 获取当前 List 信息（保留 name 和 description）
   const existingResponse = await fetch(url, {
     headers: {
       'Authorization': `Bearer ${apiToken}`,
@@ -231,49 +230,21 @@ async function syncToCloudflareList(env, IPs) {
   }
 
   const existingData = await existingResponse.json();
-  const existingItems = existingData.result?.items || [];
+  const existingList = existingData.result;
 
-  // 构建现有 IP 的 Map，记录 value 和 id
-  const existingIPMap = new Map();
-  for (const item of existingItems) {
-    existingIPMap.set(item.value, item.id);
-  }
-
-  // 找出需要添加的新 IP
-  const newIPs = IPs.filter(ip => !existingIPMap.has(ip));
-
-  // 找出需要删除的过期 IP（在 Cloudflare List 中但不在有效 IP 列表中）
-  const expiredIPs = Array.from(existingIPMap.entries())
-    .filter(([ip]) => !IPs.includes(ip))
-    .map(([ip, id]) => ({ ip, id }));
-
-  const requestBody = {};
-
-  if (newIPs.length > 0) {
-    requestBody.append = newIPs.map(ip => ({ value: ip, description: 'Auto-added' }));
-  }
-
-  if (expiredIPs.length > 0) {
-    requestBody.remove = expiredIPs.map(({ id }) => ({ id }));
-  }
-
-  // 如果没有变化，跳过更新
-  if (newIPs.length === 0 && expiredIPs.length === 0) {
-    console.log('No changes needed, skipping update');
-    return;
-  }
+  // 构建请求体：保留 name 和 description，完全替换 items
+  const requestBody = {
+    name: existingList.name,
+    description: existingList.description,
+    items: IPs.map(ip => ({ value: ip })),
+  };
 
   console.log(`Syncing to Cloudflare List ${listId}:`);
-  if (newIPs.length > 0) {
-    console.log(`  Adding ${newIPs.length} new IPs: ${newIPs.join(', ')}`);
-  }
-  if (expiredIPs.length > 0) {
-    console.log(`  Removing ${expiredIPs.length} expired IPs: ${expiredIPs.map(e => e.ip).join(', ')}`);
-  }
-  console.log(`Total valid IPs: ${IPs.length}`);
+  console.log(`  Total IPs: ${IPs.length}`);
+  console.log(`[DEBUG] Request body: ${JSON.stringify(requestBody)}`);
 
   const response = await fetch(url, {
-    method: 'PATCH',
+    method: 'PUT',
     headers: {
       'Authorization': `Bearer ${apiToken}`,
       'Content-Type': 'application/json',
